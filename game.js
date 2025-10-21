@@ -1,6 +1,6 @@
-// Ragdoll Sword Duel Game with Advanced Movement and Bot AI
+// Ragdoll Sword Duel Game with Freeform Jumping, Mouse-Aimed Sword, and Mini Dash
 
-const { Engine, Render, Runner, World, Bodies, Body, Constraint, Composite, Events } = Matter;
+const { Engine, Render, Runner, World, Bodies, Body, Constraint, Composite, Events, Vector } = Matter;
 
 // Game setup
 const width = 900;
@@ -127,13 +127,16 @@ document.addEventListener('keyup', e => {
   keys[e.key.toLowerCase()] = false;
 });
 
-// Mouse for jumping anywhere
+// Mouse for sword aim and jumping/dash
 let mouse = { x: width / 2, y: height / 2 };
 canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
   mouse.x = (e.clientX - rect.left) * (width / rect.width);
   mouse.y = (e.clientY - rect.top) * (height / rect.height);
 });
+
+// Mini dash cooldown
+let dashCooldown = 0;
 
 // Move player ragdoll
 Events.on(engine, 'beforeUpdate', function () {
@@ -145,7 +148,7 @@ Events.on(engine, 'beforeUpdate', function () {
     Body.applyForce(player.torso, player.torso.position, { x: 0.006, y: 0 });
   }
 
-  // Jump (W) at mouse-nearest body part
+  // Jump (W) from any body part closest to mouse, any time
   if (keys['w']) {
     // Find the closest body part to the mouse
     let closest = player.allBodyParts[0];
@@ -157,63 +160,59 @@ Events.on(engine, 'beforeUpdate', function () {
         closestDist = dist;
       }
     }
-    // Only jump if that part is somewhat near the mouse cursor
-    if (closestDist < 80) {
-      // Apply force away from ground (and away from mouse, so you can "kick off" in all directions)
-      let dx = closest.body.position.x - mouse.x;
-      let dy = closest.body.position.y - mouse.y;
-      let mag = Math.hypot(dx, dy) || 1;
-      Body.applyForce(closest.body, closest.body.position, { x: dx / mag * 0.16, y: dy / mag * 0.16 });
-    }
-    // Only jump once per press
-    keys['w'] = false;
+    // Apply force away from mouse (creative jumps any time)
+    let dx = closest.body.position.x - mouse.x;
+    let dy = closest.body.position.y - mouse.y;
+    let mag = Math.hypot(dx, dy) || 1;
+    Body.applyForce(closest.body, closest.body.position, { x: dx / mag * 0.16, y: dy / mag * 0.16 });
+    keys['w'] = false; // Only jump once per press
   }
 
-  // Swing sword (Space): rotate right arm
-  if (keys[' ']) {
-    Body.setAngle(player.upperArmR, Math.PI / 2.1 + Math.sin(Date.now() / 100) * 0.2);
-    Body.setAngle(player.lowerArmR, Math.PI / 2.1 + Math.sin(Date.now() / 100) * 0.2);
-  } else {
-    Body.setAngle(player.upperArmR, 0);
-    Body.setAngle(player.lowerArmR, 0);
+  // Mini dash (Z) towards mouse from torso, with cooldown
+  if (keys['z'] && dashCooldown <= 0) {
+    let dx = mouse.x - player.torso.position.x;
+    let dy = mouse.y - player.torso.position.y;
+    let mag = Math.hypot(dx, dy) || 1;
+    // Big initial burst, then cooldown
+    Body.applyForce(player.torso, player.torso.position, { x: dx / mag * 1.5, y: dy / mag * 1.5 });
+    dashCooldown = 40; // Cooldown frames
+    keys['z'] = false;
   }
+  if (dashCooldown > 0) dashCooldown--;
+
+  // Sword aims at mouse (rotate upper/lower right arm)
+  let armOrigin = player.upperArmR.position;
+  let target = mouse;
+  let angle = Math.atan2(target.y - armOrigin.y, target.x - armOrigin.x);
+  Body.setAngle(player.upperArmR, angle);
+  Body.setAngle(player.lowerArmR, angle);
 });
 
-
-// Advanced Bot AI
+// Advanced Bot AI (same as before)
 setInterval(() => {
-  // Determine distances
   const dx = player.torso.position.x - bot.torso.position.x;
   const dy = player.torso.position.y - bot.torso.position.y;
   const swordToPlayer = Matter.Vector.magnitude(Matter.Vector.sub(bot.sword.position, player.torso.position));
   const playerSwordSpeed = Matter.Vector.magnitude(player.sword.velocity);
 
-  // Bot moves toward player, but stays back if player's sword is moving hard toward it
   let caution = (playerSwordSpeed > 4 && swordToPlayer < 120 && dx * (player.sword.velocity.x) < 0);
   if (caution) {
-    // Move away from player's sword
     Body.applyForce(bot.torso, bot.torso.position, { x: -0.012 * Math.sign(dx), y: 0 });
   } else {
-    // Approach player, but try to flank or jump over sometimes
     Body.applyForce(bot.torso, bot.torso.position, { x: 0.005 * Math.sign(dx), y: 0 });
     if (Math.abs(dx) < 120 && Math.random() < 0.33 && (bot.footL.position.y > height - 55 || bot.footR.position.y > height - 55)) {
-      // Jump toward player
       Body.applyForce(bot.torso, bot.torso.position, { x: 0.04 * Math.sign(dx), y: -0.09 - 0.04 * Math.random() });
     }
   }
-  // Occasionally jump to roof
   if (Math.random() < 0.02 && bot.torso.position.y > 150) {
     Body.applyForce(bot.torso, bot.torso.position, { x: 0.03 * (Math.random() - 0.5), y: -0.12 });
   }
 
-  // Sword swing: only swing if can hit player
-  if (swordToPlayer < 90 && Math.abs(dy) < 80) {
-    Body.setAngle(bot.upperArmR, Math.PI / 2.1 + Math.sin(Date.now() / 90) * 0.3);
-    Body.setAngle(bot.lowerArmR, Math.PI / 2.1 + Math.sin(Date.now() / 90) * 0.3);
-  } else {
-    Body.setAngle(bot.upperArmR, 0);
-    Body.setAngle(bot.lowerArmR, 0);
-  }
+  // Sword aims at player torso
+  let armOrigin = bot.upperArmR.position;
+  let angle = Math.atan2(player.torso.position.y - armOrigin.y, player.torso.position.x - armOrigin.x);
+  Body.setAngle(bot.upperArmR, angle);
+  Body.setAngle(bot.lowerArmR, angle);
 }, 70);
 
 // Sword collision detection and damage
@@ -293,7 +292,7 @@ function drawHUD() {
   // Instructions
   ctx.font = "18px Arial";
   ctx.fillStyle = "#fff";
-  ctx.fillText("A/D = move | W = jump at body part under mouse | Space = swing sword", width / 2 - 230, 22);
+  ctx.fillText("A/D = move | W = jump from nearest body part towards mouse | Z = dash | Sword aims at mouse", width / 2 - 310, 22);
   ctx.restore();
 }
 (function animateHUD() {
